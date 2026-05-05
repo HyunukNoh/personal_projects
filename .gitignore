@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+*.pem
+
+# Editor / IDE
+.claude/settings.local.json
+
+# Dependencies (each sub-project has its own node_modules)
+node_modules/
+
+# Logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*

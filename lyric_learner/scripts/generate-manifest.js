@@ -13,6 +13,10 @@ const path = require('path');
 const SONGS_DIR = path.join(__dirname, '../assets/songs');
 const OUTPUT_FILE = path.join(__dirname, '../src/data/songs_manifest.ts');
 
+if (!fs.existsSync(SONGS_DIR)) {
+  fs.mkdirSync(SONGS_DIR, { recursive: true });
+}
+
 const folders = fs
   .readdirSync(SONGS_DIR)
   .filter((name) => {
@@ -66,6 +70,7 @@ ${entries},
 export default SONGS;
 `;
 
+fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
 fs.writeFileSync(OUTPUT_FILE, output, 'utf8');
 console.log(`\n✅ songs_manifest.ts updated with ${valid.length} song(s):`);
 valid.forEach((f) => console.log(`   • ${f}`));

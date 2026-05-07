@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Pressable,
@@ -13,6 +13,7 @@ interface Props {
   lines: LyricLine[];
   currentMs: number;
   containerHeight: number;
+  isPlaying: boolean;
   isRepeating: boolean;
   onLinePress: (line: LyricLine) => void;
   onToggleRepeat: () => void;
@@ -35,6 +36,7 @@ export default function LyricsView({
   lines,
   currentMs,
   containerHeight,
+  isPlaying,
   isRepeating,
   onLinePress,
   onToggleRepeat,
@@ -52,6 +54,12 @@ export default function LyricsView({
   ).current;
 
   const activeIndex = getActiveIndex(lines, currentMs);
+
+  const [showTranslation, setShowTranslation] = useState(false);
+
+  useEffect(() => {
+    setShowTranslation(isRepeating);
+  }, [isRepeating, activeIndex]);
 
   const animateLine = useCallback(
     (index: number, toActive: boolean) => {
@@ -102,6 +110,7 @@ export default function LyricsView({
     >
       {lines.map((line, index) => {
         const isActive = index === activeIndex;
+        const hasFragments = line.fragments && line.fragments.length > 0;
         return (
           <Animated.View
             key={line.id}
@@ -118,13 +127,46 @@ export default function LyricsView({
             }}
           >
             <Pressable onPress={() => onLinePress(line)} style={styles.textBlock}>
-              <Text style={styles.originalText}>{line.text}</Text>
-              {line.translation ? (
-                <Text style={styles.translationText}>{line.translation}</Text>
-              ) : null}
-              {line.translation_literal ? (
-                <Text style={styles.literalText}>{line.translation_literal}</Text>
-              ) : null}
+              <View style={styles.bubbleAnchor}>
+                {isActive && isRepeating && showTranslation && line.translation ? (
+                  <View style={styles.translationBubble} pointerEvents="none">
+                    <Text style={styles.translationBubbleText}>{line.translation}</Text>
+                  </View>
+                ) : null}
+
+                {hasFragments ? (
+                  <View style={styles.fragmentRow}>
+                    {line.fragments.map((f) => {
+                      const isWordActive =
+                        isPlaying &&
+                        currentMs >= f.timestamp_start * 1000 &&
+                        currentMs < f.timestamp_end * 1000;
+                      return (
+                        <View key={f.id} style={styles.fragmentCol}>
+                          <Text
+                            style={[
+                              styles.originalWord,
+                              isWordActive && styles.originalWordActive,
+                            ]}
+                          >
+                            {f.word}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.literalWord,
+                              isWordActive && styles.literalWordActive,
+                            ]}
+                          >
+                            {f.meaning}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <Text style={styles.originalWord}>{line.text}</Text>
+                )}
+              </View>
             </Pressable>
 
             {isActive && (
@@ -138,6 +180,26 @@ export default function LyricsView({
                     ↺
                   </Text>
                 </Pressable>
+
+                {isRepeating && (
+                  <Pressable
+                    onPress={() => setShowTranslation((v) => !v)}
+                    style={[
+                      styles.repeatButton,
+                      showTranslation && styles.repeatButtonActive,
+                    ]}
+                    hitSlop={10}
+                  >
+                    <Text
+                      style={[
+                        styles.translationToggleIcon,
+                        showTranslation && styles.repeatIconActive,
+                      ]}
+                    >
+                      ⇄
+                    </Text>
+                  </Pressable>
+                )}
               </View>
             )}
           </Animated.View>
@@ -161,30 +223,46 @@ const styles = StyleSheet.create({
   },
   textBlock: {
     alignItems: 'center',
-    gap: 6,
   },
-  originalText: {
+  bubbleAnchor: {
+    position: 'relative',
+    alignItems: 'center',
+    width: '100%',
+  },
+  fragmentRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    rowGap: 8,
+    columnGap: 10,
+  },
+  fragmentCol: {
+    alignItems: 'center',
+  },
+  originalWord: {
     fontSize: 26,
     fontWeight: '700',
     color: '#ffffff',
     lineHeight: 34,
     textAlign: 'center',
   },
-  translationText: {
+  originalWordActive: {
+    color: '#ffd966',
+  },
+  literalWord: {
     fontSize: 16,
-    color: '#888888',
+    color: '#bbbbbb',
     lineHeight: 22,
     textAlign: 'center',
   },
-  literalText: {
-    fontSize: 13,
-    color: '#555555',
-    fontStyle: 'italic',
-    lineHeight: 19,
-    textAlign: 'center',
+  literalWordActive: {
+    color: '#ffd966',
   },
   repeatRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     marginTop: 2,
   },
   repeatButton: {
@@ -204,5 +282,27 @@ const styles = StyleSheet.create({
   },
   repeatIconActive: {
     color: '#0d0d0d',
+  },
+  translationToggleIcon: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666666',
+  },
+  translationBubble: {
+    position: 'absolute',
+    bottom: '100%',
+    marginBottom: 10,
+    backgroundColor: '#222222',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    maxWidth: '90%',
+    zIndex: 10,
+  },
+  translationBubbleText: {
+    color: '#ffffff',
+    fontSize: 15,
+    lineHeight: 20,
+    textAlign: 'center',
   },
 });

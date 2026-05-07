@@ -45,3 +45,6 @@ yarn-error.*
 
 #internal mds
 /documents
+
+# generated
+src/data/songs_manifest.ts

@@ -35,6 +35,7 @@ export default function PlayerScreen() {
   // refs for stable access inside the polling interval (no stale closure)
   const isRepeatingRef = useRef(false);
   const linesRef = useRef(lines);
+  const lastRepeatSeekRef = useRef(0);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRepeating, setIsRepeating] = useState(false);
@@ -83,14 +84,17 @@ export default function PlayerScreen() {
       setPositionMs(pos);
       if (status.durationMillis) setDurationMs(status.durationMillis);
 
-      // repeat: if the active line has ended, jump back to its start
-      if (isRepeatingRef.current) {
+      // repeat: if the active line has ended (+0.3s tail), jump back to its start (-0.3s lead-in)
+      if (isRepeatingRef.current && Date.now() - lastRepeatSeekRef.current > 300) {
         const activeIdx = getActiveIndex(linesRef.current, pos);
         if (activeIdx >= 0) {
           const activeLine = linesRef.current[activeIdx];
-          if (pos >= activeLine.timestamp_end * 1000) {
-            await soundRef.current?.setPositionAsync(activeLine.timestamp_start * 1000);
-            setPositionMs(activeLine.timestamp_start * 1000);
+          const endMs = activeLine.timestamp_end * 1000 + 300;
+          const startMs = Math.max(0, activeLine.timestamp_start * 1000 - 300);
+          if (pos >= endMs) {
+            lastRepeatSeekRef.current = Date.now();
+            await soundRef.current?.setPositionAsync(startMs);
+            setPositionMs(startMs);
             return;
           }
         }
@@ -186,6 +190,7 @@ export default function PlayerScreen() {
           lines={lines}
           currentMs={positionMs}
           containerHeight={lyricsHeight}
+          isPlaying={isPlaying}
           isRepeating={isRepeating}
           onLinePress={handleLinePress}
           onToggleRepeat={handleToggleRepeat}

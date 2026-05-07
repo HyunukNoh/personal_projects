@@ -3,10 +3,17 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start",
+    "prestart": "node scripts/generate-manifest.js",
+    "start": "concurrently \"expo start\" \"node scripts/watch-songs.js\"",
+    "preandroid": "node scripts/generate-manifest.js",
     "android": "expo run:android",
-    "ios": "expo run:ios",
+    "preios": "node scripts/generate-manifest.js",
+    "ios": "expo run:ios --device",
+    "preios:release": "node scripts/generate-manifest.js",
+    "ios:release": "expo run:ios --device --configuration Release",
     "web": "expo start --web",
+    "postinstall": "node scripts/generate-manifest.js",
+    "prebuild": "node scripts/generate-manifest.js",
     "songs": "node scripts/generate-manifest.js"
   },
   "dependencies": {
@@ -27,6 +34,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "concurrently": "^9.2.1",
     "typescript": "~5.9.2"
   },
   "private": true

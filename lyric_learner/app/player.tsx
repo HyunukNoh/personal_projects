@@ -36,6 +36,8 @@ export default function PlayerScreen() {
   const isRepeatingRef = useRef(false);
   const linesRef = useRef(lines);
   const lastRepeatSeekRef = useRef(0);
+  const positionMsRef = useRef(0);
+  const repeatLineIndexRef = useRef(-1);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRepeating, setIsRepeating] = useState(false);
@@ -81,18 +83,22 @@ export default function PlayerScreen() {
       if (!status.isLoaded) return;
 
       const pos = status.positionMillis ?? 0;
+      positionMsRef.current = pos;
       setPositionMs(pos);
       if (status.durationMillis) setDurationMs(status.durationMillis);
 
-      // repeat: if the active line has ended (+0.3s tail), jump back to its start (-0.3s lead-in)
+      // repeat: if the locked line has ended (+0.3s tail), jump back to its start (-0.3s lead-in)
+      // use repeatLineIndexRef (locked at toggle time) so a -0.3s lead-in that lands in the
+      // previous line never triggers a cascade seek for that prior line
       if (isRepeatingRef.current && Date.now() - lastRepeatSeekRef.current > 300) {
-        const activeIdx = getActiveIndex(linesRef.current, pos);
-        if (activeIdx >= 0) {
-          const activeLine = linesRef.current[activeIdx];
-          const endMs = activeLine.timestamp_end * 1000 + 300;
-          const startMs = Math.max(0, activeLine.timestamp_start * 1000 - 300);
+        const lockedIdx = repeatLineIndexRef.current;
+        if (lockedIdx >= 0 && lockedIdx < linesRef.current.length) {
+          const lockedLine = linesRef.current[lockedIdx];
+          const endMs = lockedLine.timestamp_end * 1000 + 300;
+          const startMs = Math.max(0, lockedLine.timestamp_start * 1000 - 300);
           if (pos >= endMs) {
             lastRepeatSeekRef.current = Date.now();
+            positionMsRef.current = startMs;
             await soundRef.current?.setPositionAsync(startMs);
             setPositionMs(startMs);
             return;
@@ -138,6 +144,7 @@ export default function PlayerScreen() {
     const sound = soundRef.current;
     if (!sound) return;
     await sound.setPositionAsync(ms);
+    positionMsRef.current = ms;
     setPositionMs(ms);
   }, []);
 
@@ -146,6 +153,7 @@ export default function PlayerScreen() {
     if (!sound) return;
     const targetMs = line.timestamp_start * 1000;
     await sound.setPositionAsync(targetMs);
+    positionMsRef.current = targetMs;
     setPositionMs(targetMs);
     // auto-play on tap if paused
     const status = await sound.getStatusAsync();
@@ -157,7 +165,15 @@ export default function PlayerScreen() {
   }, [startPolling]);
 
   const handleToggleRepeat = useCallback(() => {
-    setIsRepeating((prev) => !prev);
+    setIsRepeating((prev) => {
+      const next = !prev;
+      if (next) {
+        repeatLineIndexRef.current = getActiveIndex(linesRef.current, positionMsRef.current);
+      } else {
+        repeatLineIndexRef.current = -1;
+      }
+      return next;
+    });
   }, []);
 
   const handleLyricsLayout = useCallback((e: LayoutChangeEvent) => {

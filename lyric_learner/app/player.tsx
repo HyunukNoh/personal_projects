@@ -87,15 +87,15 @@ export default function PlayerScreen() {
       setPositionMs(pos);
       if (status.durationMillis) setDurationMs(status.durationMillis);
 
-      // repeat: if the locked line has ended (+0.3s tail), jump back to its start (-0.3s lead-in)
-      // use repeatLineIndexRef (locked at toggle time) so a -0.3s lead-in that lands in the
-      // previous line never triggers a cascade seek for that prior line
+      // repeat: when the locked line ends, jump straight back to its start —
+      // no tail/lead-in buffers, otherwise pos crosses into the adjacent line
+      // and flips activeIndex, which is what was causing the visual transition.
       if (isRepeatingRef.current && Date.now() - lastRepeatSeekRef.current > 300) {
         const lockedIdx = repeatLineIndexRef.current;
         if (lockedIdx >= 0 && lockedIdx < linesRef.current.length) {
           const lockedLine = linesRef.current[lockedIdx];
-          const endMs = lockedLine.timestamp_end * 1000 + 300;
-          const startMs = Math.max(0, lockedLine.timestamp_start * 1000 - 300);
+          const endMs = lockedLine.timestamp_end * 1000;
+          const startMs = lockedLine.timestamp_start * 1000;
           if (pos >= endMs) {
             lastRepeatSeekRef.current = Date.now();
             positionMsRef.current = startMs;
@@ -155,6 +155,17 @@ export default function PlayerScreen() {
     await sound.setPositionAsync(targetMs);
     positionMsRef.current = targetMs;
     setPositionMs(targetMs);
+
+    // if loop is on, re-lock the loop to the newly tapped line so we don't
+    // immediately yank pos back to the previously looped line
+    if (isRepeatingRef.current) {
+      const idx = linesRef.current.findIndex((l) => l.id === line.id);
+      if (idx >= 0) {
+        repeatLineIndexRef.current = idx;
+        lastRepeatSeekRef.current = Date.now();
+      }
+    }
+
     // auto-play on tap if paused
     const status = await sound.getStatusAsync();
     if (status.isLoaded && !status.isPlaying) {

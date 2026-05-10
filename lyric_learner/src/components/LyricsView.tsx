@@ -19,6 +19,13 @@ interface Props {
   onToggleRepeat: () => void;
 }
 
+interface SelectedWord {
+  lineId: number;
+  fragmentId: number;
+}
+
+let globalShowTranslation = true;
+
 function getActiveIndex(lines: LyricLine[], currentMs: number): number {
   const currentSec = currentMs / 1000;
   let active = -1;
@@ -55,14 +62,37 @@ export default function LyricsView({
 
   const activeIndex = getActiveIndex(lines, currentMs);
 
-  const [showTranslation, setShowTranslation] = useState(false);
+  const [showTranslation, setShowTranslationState] = useState(globalShowTranslation);
+  const [selectedWord, setSelectedWord] = useState<SelectedWord | null>(null);
+
+  const toggleTranslation = useCallback(() => {
+    setShowTranslationState((v) => {
+      const next = !v;
+      globalShowTranslation = next;
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
-    setShowTranslation(isRepeating);
-  }, [isRepeating, activeIndex]);
+    setSelectedWord(null);
+  }, [activeIndex]);
+
+  const handleWordPress = useCallback((lineId: number, fragmentId: number) => {
+    setSelectedWord((prev) => {
+      if (prev?.lineId === lineId && prev?.fragmentId === fragmentId) {
+        return null;
+      }
+      return { lineId, fragmentId };
+    });
+  }, []);
 
   const animateLine = useCallback(
     (index: number, toActive: boolean) => {
+      if (isRepeating) {
+        scaleAnims[index].setValue(toActive ? 1.0 : 0.85);
+        opacityAnims[index].setValue(toActive ? 1.0 : 0.3);
+        return;
+      }
       Animated.parallel([
         Animated.spring(scaleAnims[index], {
           toValue: toActive ? 1.0 : 0.85,
@@ -77,7 +107,7 @@ export default function LyricsView({
         }),
       ]).start();
     },
-    [scaleAnims, opacityAnims]
+    [scaleAnims, opacityAnims, isRepeating]
   );
 
   useEffect(() => {
@@ -89,16 +119,36 @@ export default function LyricsView({
     if (activeIndex >= 0 && activeIndex < lines.length) {
       animateLine(activeIndex, true);
 
-      const y = lineYPositions.current[activeIndex];
-      const lineH = lineHeights.current[activeIndex] ?? 80;
-      if (y !== undefined) {
-        const targetY = y - containerHeight / 2 + lineH / 2;
-        scrollRef.current?.scrollTo({ y: Math.max(0, targetY), animated: true });
+      if (!isRepeating) {
+        const y = lineYPositions.current[activeIndex];
+        const lineH = lineHeights.current[activeIndex] ?? 80;
+        if (y !== undefined) {
+          const targetY = y - containerHeight / 2 + lineH / 2;
+          scrollRef.current?.scrollTo({ y: Math.max(0, targetY), animated: true });
+        }
       }
     }
 
     prevActiveIndex.current = activeIndex;
-  }, [activeIndex, animateLine, containerHeight, lines.length]);
+  }, [activeIndex, animateLine, containerHeight, lines.length, isRepeating]);
+
+  // While loop is on, kill any in-flight transitions and pin every line to its
+  // final scale/opacity. Re-runs if activeIndex shifts during a repeat seek so
+  // we never see a transition while looping.
+  useEffect(() => {
+    if (!isRepeating) return;
+    for (let i = 0; i < lines.length; i++) {
+      scaleAnims[i].stopAnimation();
+      opacityAnims[i].stopAnimation();
+      if (i === activeIndex) {
+        scaleAnims[i].setValue(1.0);
+        opacityAnims[i].setValue(1.0);
+      } else {
+        scaleAnims[i].setValue(0.85);
+        opacityAnims[i].setValue(0.3);
+      }
+    }
+  }, [isRepeating, activeIndex, lines.length, scaleAnims, opacityAnims]);
 
   return (
     <ScrollView
@@ -128,12 +178,6 @@ export default function LyricsView({
           >
             <Pressable onPress={() => onLinePress(line)} style={styles.textBlock}>
               <View style={styles.bubbleAnchor}>
-                {isActive && isRepeating && showTranslation && line.translation ? (
-                  <View style={styles.translationBubble} pointerEvents="none">
-                    <Text style={styles.translationBubbleText}>{line.translation}</Text>
-                  </View>
-                ) : null}
-
                 {hasFragments ? (
                   <View style={styles.fragmentRow}>
                     {line.fragments.map((f) => {
@@ -141,8 +185,51 @@ export default function LyricsView({
                         isPlaying &&
                         currentMs >= f.timestamp_start * 1000 &&
                         currentMs < f.timestamp_end * 1000;
+                      const isSelected =
+                        isActive &&
+                        selectedWord?.lineId === line.id &&
+                        selectedWord?.fragmentId === f.id;
+                      const components = f.components ?? [];
+                      const showBubble = isSelected && components.length > 0;
                       return (
-                        <View key={f.id} style={styles.fragmentCol}>
+                        <Pressable
+                          key={f.id}
+                          onPress={() => {
+                            if (!isActive) {
+                              onLinePress(line);
+                              return;
+                            }
+                            handleWordPress(line.id, f.id);
+                          }}
+                          style={[
+                            styles.fragmentCol,
+                            isSelected && styles.fragmentColSelected,
+                          ]}
+                          hitSlop={4}
+                        >
+                          {showBubble ? (
+                            <View style={styles.wordBubbleAnchor} pointerEvents="none">
+                              <View style={styles.wordBubble}>
+                                {components.map((c, ci) => (
+                                  <View
+                                    key={ci}
+                                    style={[
+                                      styles.componentItem,
+                                      ci > 0 && styles.componentItemDivider,
+                                    ]}
+                                  >
+                                    <Text style={styles.componentHighlight}>
+                                      {c.highlight}
+                                    </Text>
+                                    <Text style={styles.componentMeaning}>
+                                      {c.meaning}
+                                    </Text>
+                                  </View>
+                                ))}
+                                <View style={styles.wordBubbleArrow} />
+                              </View>
+                            </View>
+                          ) : null}
                           <Text
                             style={[
                               styles.originalWord,
@@ -159,7 +246,7 @@ export default function LyricsView({
                           >
                             {f.meaning}
                           </Text>
-                        </View>
+                        </Pressable>
                       );
                     })}
                   </View>
@@ -167,6 +254,9 @@ export default function LyricsView({
                   <Text style={styles.originalWord}>{line.text}</Text>
                 )}
               </View>
+              {isActive && isRepeating && showTranslation && line.translation ? (
+                <Text style={styles.translationLine}>{line.translation}</Text>
+              ) : null}
             </Pressable>
 
             {isActive && (
@@ -183,7 +273,7 @@ export default function LyricsView({
 
                 {isRepeating && (
                   <Pressable
-                    onPress={() => setShowTranslation((v) => !v)}
+                    onPress={toggleTranslation}
                     style={[
                       styles.repeatButton,
                       showTranslation && styles.repeatButtonActive,
@@ -238,6 +328,71 @@ const styles = StyleSheet.create({
   },
   fragmentCol: {
     alignItems: 'center',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  fragmentColSelected: {
+    backgroundColor: 'rgba(255, 217, 102, 0.12)',
+  },
+  wordBubbleAnchor: {
+    position: 'absolute',
+    bottom: '100%',
+    marginBottom: 10,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  wordBubble: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#3a3a3a',
+    alignItems: 'center',
+    minWidth: 90,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  wordBubbleArrow: {
+    position: 'absolute',
+    bottom: -6,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 6,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#1a1a1a',
+  },
+  componentItem: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+  },
+  componentItemDivider: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#2a2a2a',
+  },
+  componentHighlight: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffd966',
+    lineHeight: 22,
+  },
+  componentMeaning: {
+    fontSize: 13,
+    color: '#dddddd',
+    marginTop: 2,
+    lineHeight: 16,
+    textAlign: 'center',
   },
   originalWord: {
     fontSize: 26,
@@ -288,21 +443,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#666666',
   },
-  translationBubble: {
-    position: 'absolute',
-    bottom: '100%',
-    marginBottom: 10,
-    backgroundColor: '#222222',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    maxWidth: '90%',
-    zIndex: 10,
-  },
-  translationBubbleText: {
-    color: '#ffffff',
+  translationLine: {
+    marginTop: 10,
     fontSize: 15,
-    lineHeight: 20,
+    color: '#dddddd',
+    fontStyle: 'italic',
     textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: 8,
   },
 });

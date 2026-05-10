@@ -9,7 +9,7 @@ export interface LyricFragment {
   meaning: string;
   timestamp_start: number;
   timestamp_end: number;
-  components: LyricComponent[];
+  components?: LyricComponent[];
 }
 
 export interface LyricLine {

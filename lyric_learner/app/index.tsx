@@ -32,7 +32,7 @@ export default function SongListScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Lyric Learner</Text>
+        <Text style={styles.headerTitle}>Project phonecert</Text>
         <Text style={styles.headerSub}>Korean songs with translations</Text>
       </View>
       <FlatList

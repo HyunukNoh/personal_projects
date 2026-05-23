@@ -3,22 +3,16 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-    "prestart": "node scripts/generate-manifest.js",
-    "start": "concurrently \"expo start\" \"node scripts/watch-songs.js\"",
-    "preandroid": "node scripts/generate-manifest.js",
+    "start": "expo start",
     "android": "expo run:android",
-    "preios": "node scripts/generate-manifest.js",
     "ios": "expo run:ios --device",
-    "preios:release": "node scripts/generate-manifest.js",
     "ios:release": "expo run:ios --device --configuration Release",
     "web": "expo start --web",
-    "postinstall": "node scripts/generate-manifest.js",
-    "prebuild": "node scripts/generate-manifest.js",
-    "songs": "node scripts/generate-manifest.js"
+    "songs": "node scripts/sync-songs.js && node scripts/generate-manifest.js"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
-    "@react-native-community/slider": "5.0.1",
+    "@react-native-community/slider": "^5.2.0",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
     "expo-router": "~6.0.23",
@@ -34,7 +28,6 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
-    "concurrently": "^9.2.1",
     "typescript": "~5.9.2"
   },
   "private": true

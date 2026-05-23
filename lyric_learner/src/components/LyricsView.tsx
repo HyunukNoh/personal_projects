@@ -15,16 +15,20 @@ interface Props {
   containerHeight: number;
   isPlaying: boolean;
   isRepeating: boolean;
+  /** literal = word meanings below each word; none = no translation */
+  translationMode: 'literal' | 'none';
+  /** show contextual (sentence) translation below the active line */
+  showContextual: boolean;
   onLinePress: (line: LyricLine) => void;
   onToggleRepeat: () => void;
+  onPrevLine: () => void;
+  onNextLine: () => void;
 }
 
 interface SelectedWord {
   lineId: number;
   fragmentId: number;
 }
-
-let globalShowTranslation = true;
 
 function getActiveIndex(lines: LyricLine[], currentMs: number): number {
   const currentSec = currentMs / 1000;
@@ -45,13 +49,18 @@ export default function LyricsView({
   containerHeight,
   isPlaying,
   isRepeating,
+  translationMode,
+  showContextual,
   onLinePress,
   onToggleRepeat,
+  onPrevLine,
+  onNextLine,
 }: Props) {
   const scrollRef = useRef<ScrollView>(null);
   const lineYPositions = useRef<number[]>([]);
   const lineHeights = useRef<number[]>([]);
   const prevActiveIndex = useRef<number>(-1);
+  const needsScrollRef = useRef(false);
 
   const scaleAnims = useRef<Animated.Value[]>(
     lines.map(() => new Animated.Value(0.85))
@@ -62,16 +71,7 @@ export default function LyricsView({
 
   const activeIndex = getActiveIndex(lines, currentMs);
 
-  const [showTranslation, setShowTranslationState] = useState(globalShowTranslation);
   const [selectedWord, setSelectedWord] = useState<SelectedWord | null>(null);
-
-  const toggleTranslation = useCallback(() => {
-    setShowTranslationState((v) => {
-      const next = !v;
-      globalShowTranslation = next;
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     setSelectedWord(null);
@@ -118,23 +118,20 @@ export default function LyricsView({
     }
     if (activeIndex >= 0 && activeIndex < lines.length) {
       animateLine(activeIndex, true);
-
-      if (!isRepeating) {
-        const y = lineYPositions.current[activeIndex];
-        const lineH = lineHeights.current[activeIndex] ?? 80;
-        if (y !== undefined) {
-          const targetY = y - containerHeight / 2 + lineH / 2;
-          scrollRef.current?.scrollTo({ y: Math.max(0, targetY), animated: true });
-        }
-      }
+      // Don't scroll here — active line is about to expand so positions are stale.
+      // Set a flag and let onLayout scroll once the new layout has settled.
+      needsScrollRef.current = true;
     }
 
     prevActiveIndex.current = activeIndex;
-  }, [activeIndex, animateLine, containerHeight, lines.length, isRepeating]);
+  }, [activeIndex, animateLine, lines.length]);
 
-  // While loop is on, kill any in-flight transitions and pin every line to its
-  // final scale/opacity. Re-runs if activeIndex shifts during a repeat seek so
-  // we never see a transition while looping.
+  // Re-center when translation display changes (line height may shift).
+  useEffect(() => {
+    needsScrollRef.current = true;
+  }, [translationMode, showContextual]);
+
+  // While repeating, kill in-flight transitions and pin each line to its final value.
   useEffect(() => {
     if (!isRepeating) return;
     for (let i = 0; i < lines.length; i++) {
@@ -161,6 +158,15 @@ export default function LyricsView({
       {lines.map((line, index) => {
         const isActive = index === activeIndex;
         const hasFragments = line.fragments && line.fragments.length > 0;
+
+        // Bubble: find which fragment (if any) is selected on this active line
+        const selFrag =
+          isActive && selectedWord?.lineId === line.id
+            ? (line.fragments?.find((f) => f.id === selectedWord?.fragmentId) ?? null)
+            : null;
+        const bubbleComponents = selFrag?.components ?? [];
+        const showBubble = selFrag != null && (bubbleComponents.length > 0 || !!selFrag.meaning);
+
         return (
           <Animated.View
             key={line.id}
@@ -172,13 +178,21 @@ export default function LyricsView({
               },
             ]}
             onLayout={(e) => {
-              lineYPositions.current[index] = e.nativeEvent.layout.y;
-              lineHeights.current[index] = e.nativeEvent.layout.height;
+              const { y, height } = e.nativeEvent.layout;
+              lineYPositions.current[index] = y;
+              lineHeights.current[index] = height;
+              // Scroll after layout settles so we use the correct expanded position.
+              if (needsScrollRef.current && index === activeIndex) {
+                needsScrollRef.current = false;
+                const targetY = y - containerHeight / 2 + height / 2;
+                scrollRef.current?.scrollTo({ y: Math.max(0, targetY), animated: true });
+              }
             }}
           >
             <Pressable onPress={() => onLinePress(line)} style={styles.textBlock}>
               <View style={styles.bubbleAnchor}>
-                {hasFragments ? (
+                {translationMode === 'literal' && isActive && hasFragments ? (
+                  // ── Literal mode: word columns with meaning below, per-word bubble ──
                   <View style={styles.fragmentRow}>
                     {line.fragments.map((f) => {
                       const isWordActive =
@@ -186,28 +200,23 @@ export default function LyricsView({
                         currentMs >= f.timestamp_start * 1000 &&
                         currentMs < f.timestamp_end * 1000;
                       const isSelected =
-                        isActive &&
                         selectedWord?.lineId === line.id &&
                         selectedWord?.fragmentId === f.id;
                       const components = f.components ?? [];
-                      const showBubble = isSelected && components.length > 0;
+                      // In literal mode bubble only shows component breakdown
+                      // (basic meaning is already visible below the word)
+                      const showWordBubble = isSelected && components.length > 0;
                       return (
                         <Pressable
                           key={f.id}
-                          onPress={() => {
-                            if (!isActive) {
-                              onLinePress(line);
-                              return;
-                            }
-                            handleWordPress(line.id, f.id);
-                          }}
+                          onPress={() => handleWordPress(line.id, f.id)}
                           style={[
                             styles.fragmentCol,
                             isSelected && styles.fragmentColSelected,
                           ]}
                           hitSlop={4}
                         >
-                          {showBubble ? (
+                          {showWordBubble && (
                             <View style={styles.wordBubbleAnchor} pointerEvents="none">
                               <View style={styles.wordBubble}>
                                 {components.map((c, ci) => (
@@ -218,18 +227,14 @@ export default function LyricsView({
                                       ci > 0 && styles.componentItemDivider,
                                     ]}
                                   >
-                                    <Text style={styles.componentHighlight}>
-                                      {c.highlight}
-                                    </Text>
-                                    <Text style={styles.componentMeaning}>
-                                      {c.meaning}
-                                    </Text>
+                                    <Text style={styles.componentHighlight}>{c.highlight}</Text>
+                                    <Text style={styles.componentMeaning}>{c.meaning}</Text>
                                   </View>
                                 ))}
                                 <View style={styles.wordBubbleArrow} />
                               </View>
                             </View>
-                          ) : null}
+                          )}
                           <Text
                             style={[
                               styles.originalWord,
@@ -251,16 +256,85 @@ export default function LyricsView({
                     })}
                   </View>
                 ) : (
-                  <Text style={styles.originalWord}>{line.text}</Text>
+                  // ── Contextual / none mode: single-line text, inline word taps ──
+                  <>
+                    {/* Above-line bubble for selected word */}
+                    {showBubble && selFrag && (
+                      <View style={styles.wordBubbleAnchor} pointerEvents="none">
+                        <View style={styles.wordBubble}>
+                          {bubbleComponents.length > 0 ? (
+                            bubbleComponents.map((c, ci) => (
+                              <View
+                                key={ci}
+                                style={[
+                                  styles.componentItem,
+                                  ci > 0 && styles.componentItemDivider,
+                                ]}
+                              >
+                                <Text style={styles.componentHighlight}>{c.highlight}</Text>
+                                <Text style={styles.componentMeaning}>{c.meaning}</Text>
+                              </View>
+                            ))
+                          ) : (
+                            <View style={styles.componentItem}>
+                              <Text style={styles.componentHighlight}>{selFrag.word}</Text>
+                              <Text style={styles.componentMeaning}>{selFrag.meaning}</Text>
+                            </View>
+                          )}
+                          <View style={styles.wordBubbleArrow} />
+                        </View>
+                      </View>
+                    )}
+
+                    {isActive && hasFragments ? (
+                      <Text style={styles.originalWord}>
+                        {line.fragments.map((f, i) => {
+                          const isWordActive =
+                            isPlaying &&
+                            currentMs >= f.timestamp_start * 1000 &&
+                            currentMs < f.timestamp_end * 1000;
+                          const isSelected =
+                            selectedWord?.lineId === line.id &&
+                            selectedWord?.fragmentId === f.id;
+                          return (
+                            <React.Fragment key={f.id}>
+                              <Text
+                                onPress={() => handleWordPress(line.id, f.id)}
+                                style={(isWordActive || isSelected) ? styles.originalWordActive : undefined}
+                              >
+                                {f.word}
+                              </Text>
+                              {i < line.fragments.length - 1 ? ' ' : ''}
+                            </React.Fragment>
+                          );
+                        })}
+                      </Text>
+                    ) : (
+                      <Text style={styles.originalWord}>{line.text}</Text>
+                    )}
+                  </>
                 )}
               </View>
-              {isActive && isRepeating && showTranslation && line.translation ? (
+
+              {/* Contextual translation — shown when the ⇄ button is toggled on */}
+              {isActive && showContextual && line.translation ? (
                 <Text style={styles.translationLine}>{line.translation}</Text>
               ) : null}
             </Pressable>
 
             {isActive && (
               <View style={styles.repeatRow}>
+                {isRepeating && (
+                  <Pressable
+                    onPress={onPrevLine}
+                    style={[styles.arrowButton, index === 0 && styles.arrowButtonDisabled]}
+                    hitSlop={10}
+                    disabled={index === 0}
+                  >
+                    <Text style={styles.arrowIcon}>‹</Text>
+                  </Pressable>
+                )}
+
                 <Pressable
                   onPress={onToggleRepeat}
                   style={[styles.repeatButton, isRepeating && styles.repeatButtonActive]}
@@ -273,21 +347,15 @@ export default function LyricsView({
 
                 {isRepeating && (
                   <Pressable
-                    onPress={toggleTranslation}
+                    onPress={onNextLine}
                     style={[
-                      styles.repeatButton,
-                      showTranslation && styles.repeatButtonActive,
+                      styles.arrowButton,
+                      index === lines.length - 1 && styles.arrowButtonDisabled,
                     ]}
                     hitSlop={10}
+                    disabled={index === lines.length - 1}
                   >
-                    <Text
-                      style={[
-                        styles.translationToggleIcon,
-                        showTranslation && styles.repeatIconActive,
-                      ]}
-                    >
-                      ⇄
-                    </Text>
+                    <Text style={styles.arrowIcon}>›</Text>
                   </Pressable>
                 )}
               </View>
@@ -323,8 +391,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    rowGap: 8,
-    columnGap: 10,
+    rowGap: 10,
+    columnGap: 12,
   },
   fragmentCol: {
     alignItems: 'center',
@@ -334,6 +402,16 @@ const styles = StyleSheet.create({
   },
   fragmentColSelected: {
     backgroundColor: 'rgba(255, 217, 102, 0.12)',
+  },
+  literalWord: {
+    fontSize: 15,
+    color: '#aaaaaa',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  literalWordActive: {
+    color: '#ffd966',
   },
   wordBubbleAnchor: {
     position: 'absolute',
@@ -404,20 +482,11 @@ const styles = StyleSheet.create({
   originalWordActive: {
     color: '#ffd966',
   },
-  literalWord: {
-    fontSize: 16,
-    color: '#bbbbbb',
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  literalWordActive: {
-    color: '#ffd966',
-  },
   repeatRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 12,
     marginTop: 2,
   },
   repeatButton: {
@@ -438,10 +507,23 @@ const styles = StyleSheet.create({
   repeatIconActive: {
     color: '#0d0d0d',
   },
-  translationToggleIcon: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666666',
+  arrowButton: {
+    width: 32,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#444444',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  arrowButtonDisabled: {
+    opacity: 0.3,
+  },
+  arrowIcon: {
+    fontSize: 22,
+    color: '#cccccc',
+    lineHeight: 24,
+    marginTop: -2,
   },
   translationLine: {
     marginTop: 10,

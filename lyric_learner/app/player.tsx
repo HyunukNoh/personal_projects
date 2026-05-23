@@ -1,3 +1,4 @@
+import Slider from '@react-native-community/slider';
 import { Audio, AVPlaybackStatus } from 'expo-av';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,8 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LyricsView from '../src/components/LyricsView';
-import ProgressSlider from '../src/components/ProgressSlider';
-import SONGS from '../src/data/songs_manifest';
+import SONGS from '../src/data/getSongs';
 import { LyricLine } from '../src/types';
 
 function getActiveIndex(lines: LyricLine[], positionMs: number): number {
@@ -25,10 +25,13 @@ function getActiveIndex(lines: LyricLine[], positionMs: number): number {
   return active;
 }
 
+// persists across mounts within the session
+let globalTranslationMode: 'literal' | 'none' = 'literal';
+
 export default function PlayerScreen() {
   const { songId } = useLocalSearchParams<{ songId: string }>();
   const song = SONGS.find((s) => s.id === songId) ?? SONGS[0];
-  const lines = song.translationData.lines;
+  const lines = song?.translationData.lines ?? [];
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -38,42 +41,53 @@ export default function PlayerScreen() {
   const lastRepeatSeekRef = useRef(0);
   const positionMsRef = useRef(0);
   const repeatLineIndexRef = useRef(-1);
+  const playbackRateRef = useRef(1);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRepeating, setIsRepeating] = useState(false);
   const [positionMs, setPositionMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
   const [lyricsHeight, setLyricsHeight] = useState(400);
+  const [translationMode, setTranslationMode] = useState<'literal' | 'none'>(globalTranslationMode);
+  const [showContextual, setShowContextual] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showSpeedSlider, setShowSpeedSlider] = useState(false);
+  const [speedDraft, setSpeedDraft] = useState<number | null>(null);
 
   // keep refs in sync with state
   useEffect(() => { isRepeatingRef.current = isRepeating; }, [isRepeating]);
   useEffect(() => { linesRef.current = lines; }, [lines]);
+  useEffect(() => { playbackRateRef.current = playbackRate; }, [playbackRate]);
 
   useEffect(() => {
+    if (!song) { router.back(); return; }
+
     Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
       playsInSilentModeIOS: true,
     });
 
-    let sound: Audio.Sound;
-    (async () => {
-      const { sound: s } = await Audio.Sound.createAsync(song.audioAsset, {
-        shouldPlay: false,
-      });
-      sound = s;
-      soundRef.current = s;
+    if (song.audioAsset != null) {
+      (async () => {
+        const { sound: s } = await Audio.Sound.createAsync(song.audioAsset as number, {
+          shouldPlay: false,
+          rate: playbackRateRef.current,
+          shouldCorrectPitch: true,
+        });
+        soundRef.current = s;
 
-      const status = await s.getStatusAsync();
-      if (status.isLoaded && status.durationMillis) {
-        setDurationMs(status.durationMillis);
-      }
-    })();
+        const status = await s.getStatusAsync();
+        if (status.isLoaded && status.durationMillis) {
+          setDurationMs(status.durationMillis);
+        }
+      })();
+    }
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      sound?.unloadAsync();
+      soundRef.current?.unloadAsync();
     };
-  }, [song.audioAsset]);
+  }, [song?.audioAsset]);
 
   const startPolling = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
@@ -83,13 +97,9 @@ export default function PlayerScreen() {
       if (!status.isLoaded) return;
 
       const pos = status.positionMillis ?? 0;
-      positionMsRef.current = pos;
-      setPositionMs(pos);
       if (status.durationMillis) setDurationMs(status.durationMillis);
 
-      // repeat: when the locked line ends, jump straight back to its start —
-      // no tail/lead-in buffers, otherwise pos crosses into the adjacent line
-      // and flips activeIndex, which is what was causing the visual transition.
+      // Check repeat BEFORE updating positionMs state to avoid flickering the active line.
       if (isRepeatingRef.current && Date.now() - lastRepeatSeekRef.current > 300) {
         const lockedIdx = repeatLineIndexRef.current;
         if (lockedIdx >= 0 && lockedIdx < linesRef.current.length) {
@@ -99,12 +109,15 @@ export default function PlayerScreen() {
           if (pos >= endMs) {
             lastRepeatSeekRef.current = Date.now();
             positionMsRef.current = startMs;
-            await soundRef.current?.setPositionAsync(startMs);
             setPositionMs(startMs);
+            await soundRef.current?.setPositionAsync(startMs);
             return;
           }
         }
       }
+
+      positionMsRef.current = pos;
+      setPositionMs(pos);
 
       if (status.didJustFinish) {
         setIsPlaying(false);
@@ -156,8 +169,7 @@ export default function PlayerScreen() {
     positionMsRef.current = targetMs;
     setPositionMs(targetMs);
 
-    // if loop is on, re-lock the loop to the newly tapped line so we don't
-    // immediately yank pos back to the previously looped line
+    // if loop is on, re-lock to the newly tapped line
     if (isRepeatingRef.current) {
       const idx = linesRef.current.findIndex((l) => l.id === line.id);
       if (idx >= 0) {
@@ -187,9 +199,58 @@ export default function PlayerScreen() {
     });
   }, []);
 
+  const handleCycleTranslation = useCallback(() => {
+    setTranslationMode((prev) => {
+      const next = prev === 'literal' ? 'none' : 'literal';
+      globalTranslationMode = next;
+      return next;
+    });
+  }, []);
+
+  const handleRateChange = useCallback(async (rate: number) => {
+    setPlaybackRate(rate);
+    playbackRateRef.current = rate;
+    const sound = soundRef.current;
+    if (!sound) return;
+    const status = await sound.getStatusAsync();
+    if (status.isLoaded) {
+      await sound.setRateAsync(rate, true);
+    }
+  }, []);
+
+
+  const seekToLineIndex = useCallback(async (idx: number) => {
+    const sound = soundRef.current;
+    if (!sound) return;
+    const line = linesRef.current[idx];
+    if (!line) return;
+    const targetMs = line.timestamp_start * 1000;
+    await sound.setPositionAsync(targetMs);
+    positionMsRef.current = targetMs;
+    setPositionMs(targetMs);
+    repeatLineIndexRef.current = idx;
+    lastRepeatSeekRef.current = Date.now();
+  }, []);
+
+  const handlePrevLine = useCallback(async () => {
+    const currentIdx = repeatLineIndexRef.current;
+    if (currentIdx <= 0) return;
+    await seekToLineIndex(currentIdx - 1);
+  }, [seekToLineIndex]);
+
+  const handleNextLine = useCallback(async () => {
+    const currentIdx = repeatLineIndexRef.current;
+    if (currentIdx < 0 || currentIdx >= linesRef.current.length - 1) return;
+    await seekToLineIndex(currentIdx + 1);
+  }, [seekToLineIndex]);
+
   const handleLyricsLayout = useCallback((e: LayoutChangeEvent) => {
     setLyricsHeight(e.nativeEvent.layout.height);
   }, []);
+
+  if (!song) return null;
+
+  const speedLabel = `${playbackRate}×`;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -219,24 +280,102 @@ export default function PlayerScreen() {
           containerHeight={lyricsHeight}
           isPlaying={isPlaying}
           isRepeating={isRepeating}
+          translationMode={translationMode}
+          showContextual={showContextual}
           onLinePress={handleLinePress}
           onToggleRepeat={handleToggleRepeat}
+          onPrevLine={handlePrevLine}
+          onNextLine={handleNextLine}
         />
       </View>
 
-      {/* Controls */}
-      <View style={styles.controls}>
-        <ProgressSlider
-          positionMs={positionMs}
-          durationMs={durationMs}
-          onSeek={handleSeek}
-        />
+      {/* Translation toggle — sits between lyrics and control panel */}
+      <View style={styles.modeToggleBar}>
         <Pressable
-          onPress={togglePlayPause}
-          style={({ pressed }) => [styles.playButton, pressed && styles.playButtonPressed]}
+          onPress={() => setShowContextual((v) => !v)}
+          style={styles.modeToggleButton}
+          hitSlop={10}
         >
-          <Text style={styles.playIcon}>{isPlaying ? '⏸' : '▶'}</Text>
+          <Text style={[styles.modeToggleText, showContextual && styles.modeToggleTextOn]}>
+            {showContextual ? 'translation on' : 'translation off'}
+          </Text>
         </Pressable>
+      </View>
+
+      {/* Control panel — visually distinct from the lyrics area */}
+      <View style={styles.controlPanel}>
+        {/* Speed slider overlay — floats above the panel without shifting layout */}
+        {showSpeedSlider && (
+          <View style={styles.speedSliderOverlay}>
+            <Text style={styles.speedOverlayLabel}>
+              {speedDraft !== null ? `${speedDraft}×` : speedLabel}
+            </Text>
+            <Slider
+              style={styles.speedOverlaySlider}
+              minimumValue={0.5}
+              maximumValue={2}
+              step={0.25}
+              value={playbackRate}
+              onValueChange={(v) => setSpeedDraft(v)}
+              onSlidingComplete={async (v) => {
+                setSpeedDraft(null);
+                await handleRateChange(v);
+                setShowSpeedSlider(false);
+              }}
+              minimumTrackTintColor="#ffffff"
+              maximumTrackTintColor="#333333"
+              thumbTintColor="#ffffff"
+            />
+          </View>
+        )}
+
+        {/* Play row */}
+        <View style={styles.playRow}>
+          <View style={styles.sideSlot} />
+          <Pressable
+            onPress={togglePlayPause}
+            style={({ pressed }) => [styles.playButton, pressed && styles.playButtonPressed]}
+          >
+            {isPlaying ? (
+              <View style={styles.pauseIconContainer}>
+                <View style={styles.pauseBar} />
+                <View style={styles.pauseBar} />
+              </View>
+            ) : (
+              <Text style={styles.playIcon}>▶</Text>
+            )}
+          </Pressable>
+          <View style={styles.sideSlot}>
+            {/* Translation mode toggle: literal ↔ none (none = white = "clean") */}
+            <Pressable
+              onPress={handleCycleTranslation}
+              style={[
+                styles.translationToggle,
+                translationMode === 'none' && styles.translationToggleActive,
+              ]}
+              hitSlop={10}
+            >
+              <Text
+                style={[
+                  styles.translationToggleIcon,
+                  translationMode === 'none' && styles.translationToggleIconActive,
+                ]}
+              >
+                {translationMode === 'literal' ? '≡' : '—'}
+              </Text>
+            </Pressable>
+            {/* Speed button — tap to reveal slider overlay */}
+            <Pressable
+              onPress={() => setShowSpeedSlider((v) => !v)}
+              hitSlop={10}
+              style={[styles.speedButton, showSpeedSlider && styles.speedButtonActive]}
+            >
+              <Text style={[styles.speedButtonText, showSpeedSlider && styles.speedButtonTextActive]}>
+                {speedLabel}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -279,19 +418,98 @@ const styles = StyleSheet.create({
   lyricsContainer: {
     flex: 1,
   },
-  controls: {
+  controlPanel: {
+    borderTopWidth: 1,
+    borderTopColor: '#1c1c1c',
     paddingBottom: 12,
   },
+  modeToggleBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 24,
+    paddingVertical: 6,
+  },
+  modeToggleButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2e2e2e',
+  },
+  modeToggleText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#444444',
+  },
+  modeToggleTextOn: {
+    color: '#888888',
+  },
+  controlPanel: {
+    backgroundColor: '#131313',
+    borderTopWidth: 1,
+    borderTopColor: '#262626',
+    paddingBottom: 12,
+    // upward shadow so it feels like a raised tray
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 12,
+  },
+  speedSliderOverlay: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    bottom: '100%',
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1e1e1e',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#2e2e2e',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    zIndex: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 16,
+  },
+  speedOverlayLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#aaaaaa',
+    width: 34,
+    textAlign: 'center',
+  },
+  speedOverlaySlider: {
+    flex: 1,
+    height: 30,
+  },
+  playRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  sideSlot: {
+    width: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
   playButton: {
-    alignSelf: 'center',
     width: 72,
     height: 72,
     borderRadius: 36,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 12,
-    marginBottom: 8,
   },
   playButtonPressed: {
     backgroundColor: '#cccccc',
@@ -300,5 +518,56 @@ const styles = StyleSheet.create({
     fontSize: 28,
     color: '#0d0d0d',
     marginLeft: 3,
+  },
+  pauseIconContainer: {
+    flexDirection: 'row',
+    gap: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pauseBar: {
+    width: 5,
+    height: 22,
+    borderRadius: 2.5,
+    backgroundColor: '#0d0d0d',
+  },
+  translationToggle: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#444444',
+  },
+  translationToggleActive: {
+    backgroundColor: '#ffffff',
+    borderColor: '#ffffff',
+  },
+  translationToggleIcon: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#888888',
+    letterSpacing: 0.5,
+  },
+  translationToggleIconActive: {
+    color: '#0d0d0d',
+  },
+  speedButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  speedButtonActive: {
+    borderColor: '#ffffff',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  speedButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666666',
+  },
+  speedButtonTextActive: {
+    color: '#ffffff',
   },
 });

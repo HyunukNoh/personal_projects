@@ -46,5 +46,10 @@ yarn-error.*
 #internal mds
 /documents
 
-# generated
+# song mounting scripts (local workflow only)
+/scripts
+
+# generated — rebuilt locally by metro.config.js or npm run songs
 src/data/songs_manifest.ts
+src/data/songs_manifest.json
+src/data/songs_audio.ts

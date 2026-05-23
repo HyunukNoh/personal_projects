@@ -1,7 +1,7 @@
 import { FlatList, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import SONGS from '../src/data/songs_manifest';
+import SONGS from '../src/data/getSongs';
 import { SongManifestEntry } from '../src/types';
 
 export default function SongListScreen() {

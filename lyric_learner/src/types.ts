@@ -41,9 +41,12 @@ export interface SongInfo {
   notes: string;
 }
 
-export interface SongManifestEntry {
+export interface SongManifestJSON {
   id: string;
   songInfo: SongInfo;
-  audioAsset: number;
   translationData: TranslationData;
+}
+
+export interface SongManifestEntry extends SongManifestJSON {
+  audioAsset: number | null;
 }
